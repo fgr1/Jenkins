@@ -27,14 +27,10 @@ pipeline {
         echo 'Limpando containers/rede...'
         bat '''
           @echo off
-          rem Se docker não estiver acessível, não falhe
           where docker >NUL 2>&1 || goto :done
           docker ps >NUL 2>&1 || goto :done
-
           docker rm -fv %APP_CONT% %DB_CONT% 1>NUL 2>&1
-
           docker network rm %NET_NAME% 1>NUL 2>&1
-
           :done
           exit /b 0
         '''
