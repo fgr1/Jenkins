@@ -9,14 +9,11 @@ pipeline {
   environment {
     DB_IMAGE   = 'devops/mysql-seeded:8.0'
     APP_IMAGE  = 'devops/flask-mysql:latest'
-
     NET_NAME   = 'devops-net'
     DB_CONT    = 'devops_db'
     APP_CONT   = 'devops_web'
-
     DB_PORT    = '3306:3306'
     APP_PORT   = '8200:8200'
-
     MYSQL_ROOT_PASSWORD = 'admin'
     MYSQL_USER          = 'user'
     MYSQL_PASSWORD      = 'password'
@@ -30,8 +27,15 @@ pipeline {
         echo 'Limpando containers/rede...'
         bat '''
           @echo off
+          rem Se docker não estiver acessível, não falhe
+          where docker >NUL 2>&1 || goto :done
+          docker ps >NUL 2>&1 || goto :done
+
           docker rm -f %APP_CONT% %DB_CONT% 1>NUL 2>&1
           docker network rm %NET_NAME% 1>NUL 2>&1
+
+          :done
+          exit /b 0
         '''
       }
     }
@@ -87,10 +91,7 @@ pipeline {
             if ($p.ExitCode -eq 0) { $ok = $true; break }
             Start-Sleep -Seconds 1
           }
-          if (-not $ok) {
-            Write-Host "O bixo pegou, o DB não responde."; 
-            exit 1
-          }
+          if (-not $ok) { Write-Host "DB não respondeu a tempo."; exit 1 }
         '''
 
         bat '''
@@ -109,14 +110,11 @@ pipeline {
           for ($i=0; $i -lt 30; $i++) {
             try {
               $r = Invoke-WebRequest -Uri "http://localhost:8200/" -UseBasicParsing -TimeoutSec 5
-              if ($r.StatusCode -eq 200 -or $r.StatusCode -eq 302 -or $r.StatusCode -eq 301) { $ok = $true; break }
+              if ($r.StatusCode -in 200,301,302) { $ok = $true; break }
             } catch { }
             Start-Sleep -Seconds 2
           }
-          if (-not $ok) {
-            Write-Host "Alguma coisa errada não está certa"
-            exit 1
-          }
+          if (-not $ok) { Write-Host "App não respondeu dentro do tempo."; exit 1 }
         '''
       }
     }
@@ -127,16 +125,14 @@ pipeline {
       echo 'Coletando logs...'
       bat '''
         @echo off
-        docker logs %DB_CONT%  > db-logs.txt  2>&1
-        docker logs %APP_CONT% > app-logs.txt 2>&1
+        where docker >NUL 2>&1 || (echo (sem docker) > db-logs.txt & echo (sem docker) > app-logs.txt & exit /b 0)
+        docker logs %DB_CONT%  > db-logs.txt  2>&1 || echo (sem logs DB)  > db-logs.txt
+        docker logs %APP_CONT% > app-logs.txt 2>&1 || echo (sem logs APP) > app-logs.txt
+        exit /b 0
       '''
       archiveArtifacts artifacts: '*.txt', onlyIfSuccessful: false
     }
-    success {
-      echo 'Suuuucesso! App em: http://localhost:8200/'
-    }
-    failure {
-      echo 'Eita, deu erro!'
-    }
+    success { echo 'SUUUUUCESSO! App em: http://localhost:8200/' }
+    failure { echo 'Eita. Falhou!' }
   }
 }
