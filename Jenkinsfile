@@ -52,9 +52,11 @@ pipeline {
         echo 'Build das imagens...'
         bat '''
           @echo off
+          dir db
           docker build -f Dockerfile.mysql -t %DB_IMAGE%  db
           if errorlevel 1 exit /b 1
 
+          dir app
           docker build -f Dockerfile.web -t %APP_IMAGE% app
           if errorlevel 1 exit /b 1
 
