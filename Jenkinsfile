@@ -1,8 +1,8 @@
 pipeline {
   agent any
+
   options {
     timestamps()
-    ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
@@ -17,9 +17,9 @@ pipeline {
     DB_PORT    = '3306:3306'
     APP_PORT   = '8200:8200'
 
-    MYSQL_ROOT_PASSWORD = 'rootpass'
-    MYSQL_USER          = 'appuser'
-    MYSQL_PASSWORD      = 'apppass'
+    MYSQL_ROOT_PASSWORD = 'admin'
+    MYSQL_USER          = 'user'
+    MYSQL_PASSWORD      = 'password'
     MYSQL_DBNAME        = 'docker_e_kubernetes'
     MYSQL_ADDRESS       = 'devops_db:3306'
   }
@@ -27,14 +27,11 @@ pipeline {
   stages {
     stage('Cleanup') {
       steps {
-        echo "Limpando workspace e recursos Docker..."
-        deleteDir()
-        sh '''
-          set +e
-          docker rm -f ${APP_CONT} ${DB_CONT} 2>/dev/null || true
-          docker network rm ${NET_NAME} 2>/dev/null || true
-          docker image prune -f || true
-          set -e
+        echo 'Limpando containers/rede...'
+        bat '''
+          @echo off
+          docker rm -f %APP_CONT% %DB_CONT% 1>NUL 2>&1
+          docker network rm %NET_NAME% 1>NUL 2>&1
         '''
       }
     }
@@ -42,67 +39,84 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'ls -la'
+        bat 'dir'
       }
     }
 
     stage('Construção') {
       steps {
-        echo "Build das imagens (MySQL + App)..."
-        sh '''
-          docker build -t ${DB_IMAGE}  docker/mysql
-          docker build -t ${APP_IMAGE} docker/app
-          docker image ls | grep -E "demo/mysql-seeded|demo/flask-mysql" || true
+        echo 'Build das imagens...'
+        bat '''
+          @echo off
+          docker build -t %DB_IMAGE%  mysql
+          if errorlevel 1 exit /b 1
+
+          docker build -t %APP_IMAGE% app
+          if errorlevel 1 exit /b 1
+
+          docker images
         '''
       }
     }
 
     stage('Entrega') {
       steps {
-        echo "Criando rede e subindo containers..."
-        sh '''
-          # Rede
-          docker network create ${NET_NAME} || true
+        echo 'Criando rede, subindo DB e App...'
 
-          # DB
-          docker run -d --name ${DB_CONT} --network ${NET_NAME} -p ${DB_PORT} \
-            -e MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD} \
-            -e MYSQL_DATABASE=${MYSQL_DBNAME} \
-            -e MYSQL_USER=${MYSQL_USER} \
-            -e MYSQL_PASSWORD=${MYSQL_PASSWORD} \
-            ${DB_IMAGE}
+        bat '''
+          @echo off
+          docker network inspect %NET_NAME% 1>NUL 2>&1 || docker network create %NET_NAME%
+          if errorlevel 1 exit /b 1
+        '''
 
-          echo "Aguardando MySQL responder..."
-          for i in $(seq 1 60); do
-            if docker exec ${DB_CONT} mysqladmin ping -h 127.0.0.1 -p${MYSQL_ROOT_PASSWORD} --silent; then
-              echo "MySQL OK"; break
-            fi
-            sleep 1
-            if [ "$i" -eq 60 ]; then
-              echo "Alguma coisa errada não está certa com o DB."
-              docker logs ${DB_CONT} || true
-              exit 1
-            fi
-          done
+        bat '''
+          @echo off
+          docker run -d --name %DB_CONT% --network %NET_NAME% -p %DB_PORT% ^
+            -e MYSQL_ROOT_PASSWORD=%MYSQL_ROOT_PASSWORD% ^
+            -e MYSQL_DATABASE=%MYSQL_DBNAME% ^
+            -e MYSQL_USER=%MYSQL_USER% ^
+            -e MYSQL_PASSWORD=%MYSQL_PASSWORD% ^
+            %DB_IMAGE%
+          if errorlevel 1 exit /b 1
+        '''
 
-          # App
-          docker run -d --name ${APP_CONT} --network ${NET_NAME} -p ${APP_PORT} \
-            -e MYSQL_USERNAME=${MYSQL_USER} \
-            -e MYSQL_PASSWORD=${MYSQL_PASSWORD} \
-            -e MYSQL_ADDRESS=${MYSQL_ADDRESS} \
-            -e MYSQL_DBNAME=${MYSQL_DBNAME} \
-            ${APP_IMAGE}
+        powershell '''
+          $ok = $false
+          for ($i=0; $i -lt 60; $i++) {
+            $p = Start-Process docker -ArgumentList "exec", "$env:DB_CONT", "mysqladmin","ping","-h","127.0.0.1","-p$env:MYSQL_ROOT_PASSWORD","--silent" -NoNewWindow -PassThru -Wait
+            if ($p.ExitCode -eq 0) { $ok = $true; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ok) {
+            Write-Host "O bixo pegou, o DB não responde."; 
+            exit 1
+          }
+        '''
 
-          echo "Smoke test do app (HTTP 200 esperado)..."
-          for i in $(seq 1 30); do
-            if curl -sSf http://localhost:8200/ > /dev/null; then
-              echo "Sucesso."; exit 0
-            fi
-            sleep 2
-          done
-          echo "Eita"
-          docker logs ${APP_CONT} || true
-          exit 1
+        bat '''
+          @echo off
+          docker run -d --name %APP_CONT% --network %NET_NAME% -p %APP_PORT% ^
+            -e MYSQL_USERNAME=%MYSQL_USER% ^
+            -e MYSQL_PASSWORD=%MYSQL_PASSWORD% ^
+            -e MYSQL_ADDRESS=%MYSQL_ADDRESS% ^
+            -e MYSQL_DBNAME=%MYSQL_DBNAME% ^
+            %APP_IMAGE%
+          if errorlevel 1 exit /b 1
+        '''
+
+        powershell '''
+          $ok = $false
+          for ($i=0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:8200/" -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200 -or $r.StatusCode -eq 302 -or $r.StatusCode -eq 301) { $ok = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $ok) {
+            Write-Host "Alguma coisa errada não está certa"
+            exit 1
+          }
         '''
       }
     }
@@ -110,20 +124,19 @@ pipeline {
 
   post {
     always {
-      echo "Coletando logs..."
-      sh '''
-        set +e
-        docker logs ${DB_CONT}    > db-logs.txt 2>&1 || true
-        docker logs ${APP_CONT}   > app-logs.txt 2>&1 || true
-        set -e
+      echo 'Coletando logs...'
+      bat '''
+        @echo off
+        docker logs %DB_CONT%  > db-logs.txt  2>&1
+        docker logs %APP_CONT% > app-logs.txt 2>&1
       '''
       archiveArtifacts artifacts: '*.txt', onlyIfSuccessful: false
     }
     success {
-      echo "Dale! App disponível em http://<host>:8200/"
+      echo 'Suuuucesso! App em: http://localhost:8200/'
     }
     failure {
-      echo "Vixe! Algo deu errado."
+      echo 'Eita, deu erro!'
     }
   }
 }
