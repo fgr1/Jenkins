@@ -55,7 +55,7 @@ pipeline {
           docker build -f db/Dockerfile.mysql -t %DB_IMAGE%  db
           if errorlevel 1 exit /b 1
 
-          docker build -f app/Dockerfile.web-t %APP_IMAGE% app
+          docker build -f app/Dockerfile.web -t %APP_IMAGE% app
           if errorlevel 1 exit /b 1
 
           docker images
