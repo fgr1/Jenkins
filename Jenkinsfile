@@ -48,7 +48,6 @@ pipeline {
 
                 powershell "(Get-Content db/codigo.sql) -replace 'CREATE DATABASE docker_e_kubernetes;', '' | Set-Content db/codigo.sql"
 
-                powershell "(Get-Content app/main.py) -replace 'class Usuario\\(Base\\):', 'class Usuario(db.Model):' | Set-Content app/main.py"
                 
                 bat '''
                     @echo on
