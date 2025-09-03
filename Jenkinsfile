@@ -31,7 +31,8 @@ pipeline {
           where docker >NUL 2>&1 || goto :done
           docker ps >NUL 2>&1 || goto :done
 
-          docker rm -f %APP_CONT% %DB_CONT% 1>NUL 2>&1
+          docker rm -fv %APP_CONT% %DB_CONT% 1>NUL 2>&1
+
           docker network rm %NET_NAME% 1>NUL 2>&1
 
           :done
